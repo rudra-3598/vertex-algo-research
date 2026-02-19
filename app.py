@@ -224,9 +224,13 @@ else: st.title("VERTEX ALGO")
 
 st.markdown("### Generate & Email Institutional Research Reports")
 
-st.sidebar.header("⚙️ Admin Email Settings")
-sender_email = st.sidebar.text_input("Your Vertex Gmail")
-app_pass = st.sidebar.text_input("Gmail App Password", type="password")
+# --- SECURE EMAIL FETCHING ---
+try:
+    sender_email = st.secrets["EMAIL_USER"]
+    app_pass = st.secrets["EMAIL_PASS"]
+except Exception:
+    st.error("⚠️ Admin Secrets not found. Please configure Streamlit Secrets.")
+    sender_email, app_pass = None, None
 
 ticker_input = st.text_input("Stock Ticker (e.g., HDFCBANK.NS, RELIANCE.NS)")
 user_email = st.text_input("Your Email Address")
