@@ -3,3 +3,5 @@ yfinance
 pandas_ta
 mplfinance
 pdfkit
+pandas
+fyers-apiv3
