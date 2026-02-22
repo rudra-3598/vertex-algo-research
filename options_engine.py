@@ -9,6 +9,7 @@ import os
 import pdfkit
 import smtplib
 from email.message import EmailMessage
+import csv  # <-- ADDED FOR PAPER TRADING
 
 # --- DATABASES ---
 @st.cache_data
@@ -257,7 +258,7 @@ def render_ui(fyers):
 
     with tab_grid:
         st.markdown("#### Deep Technical Setup Grid")
-        st.write("Calculates Spot TA. Clicking Email will combine Spot + OI + Option Premium into one report.")
+        st.write("Calculates Spot TA. Use the Track button to add setups directly to your Paper Ledger.")
         
         if st.button("🚀 Run Full Grid Scan", use_container_width=True):
             st.markdown("---")
@@ -306,9 +307,31 @@ def render_ui(fyers):
                     """, unsafe_allow_html=True)
                     
                     if "NEUTRAL" not in trend:
-                        if st.button(f"⚡ Tear Sheet for {sym}", key=f"btn_{sym}"):
-                            if user_email:
-                                with st.spinner(f"Running TRIPLE CONFLUENCE checks for {sym}..."):
-                                    email_detailed_setup(fyers, sym, trader_profile, user_email, max_risk)
-                            else:
-                                st.error("Enter delivery email at the top.")
+                        btn_col1, btn_col2 = st.columns(2)
+                        
+                        # Button 1: Email Tear Sheet
+                        with btn_col1:
+                            if st.button(f"⚡ Tear Sheet", key=f"btn_pdf_{sym}"):
+                                if user_email:
+                                    with st.spinner(f"Compiling..."): email_detailed_setup(fyers, sym, trader_profile, user_email, max_risk)
+                                else: st.error("Email required.")
+                                
+                        # Button 2: Send to Paper Ledger
+                        with btn_col2:
+                            if st.button(f"📝 Track", key=f"btn_track_{sym}"):
+                                file_exists = os.path.isfile('paper_trades.csv')
+                                with open('paper_trades.csv', 'a', newline='') as f:
+                                    writer = csv.writer(f)
+                                    if not file_exists:
+                                        writer.writerow(['Date', 'Asset', 'Profile', 'Action', 'Entry', 'Target', 'Stoploss', 'Status', 'Exit_Price', 'PnL'])
+                                    
+                                    # Approximating option entry math so we don't spam the API on click
+                                    entry_approx = round(spot_price * 0.015, 2) 
+                                    if "BULLISH" in trend: action_txt = f"BUY CE" if trader_profile == "Option Buyer" else f"SELL PE"
+                                    else: action_txt = f"BUY PE" if trader_profile == "Option Buyer" else f"SELL CE"
+                                    
+                                    target_approx = round(entry_approx * 1.5, 2) if trader_profile == "Option Buyer" else round(entry_approx * 0.1, 2)
+                                    sl_approx = round(entry_approx * 0.7, 2) if trader_profile == "Option Buyer" else round(entry_approx * 1.5, 2)
+                                    
+                                    writer.writerow([datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), sym, trader_profile, action_txt, entry_approx, target_approx, sl_approx, 'OPEN', 0.0, 0.0])
+                                st.success(f"Tracked!")
