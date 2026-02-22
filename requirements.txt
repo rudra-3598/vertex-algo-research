@@ -5,3 +5,4 @@ mplfinance
 pdfkit
 pandas
 fyers-apiv3
+streamlit-autorefresh
