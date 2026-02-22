@@ -2,10 +2,8 @@ import streamlit as st
 import os
 from fyers_apiv3 import fyersModel
 
-# --- SETTING PAGE CONFIG FIRST ---
 st.set_page_config(page_title="Vertex Algo | Pro Terminal", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
 
-# --- CUSTOM CSS INJECTION (INSTITUTIONAL DARK THEME) ---
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; color: #e0e0e0; font-family: 'Inter', sans-serif; }
@@ -23,13 +21,13 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- IMPORTING OUR CUSTOM MODULES ---
 import pro_analyzer
 import fno_screener
 import options_engine
 import smart_money
 import paper_ledger 
-import backtest_engine # <-- NAYA BACKTESTER MODULE IMPORT KIYA
+import backtest_engine 
+import live_algo_scanner # <-- NAYA MODULE IMPORT KIYA
 
 try:
     FYERS_CLIENT_ID = st.secrets["FYERS_CLIENT_ID"]
@@ -40,12 +38,10 @@ except Exception:
     st.stop()
 
 TOKEN_FILE = "fyers_token.txt"
-
 def load_saved_token():
     if os.path.exists(TOKEN_FILE):
         with open(TOKEN_FILE, "r") as f: return f.read().strip()
     return None
-
 def save_token_to_file(token):
     with open(TOKEN_FILE, "w") as f: f.write(token)
 
@@ -78,16 +74,16 @@ with st.sidebar.expander("🔐 Fyers Admin Auth"):
 if not st.session_state['fyers_access_token']: st.warning("🔒 Terminal Locked."); st.stop()
 
 fyers = get_fyers_instance()
-
 st.markdown("<h1 style='text-align: center; color: #4caf50; letter-spacing: 2px;'>VERTEX ALGO | INSTITUTIONAL TERMINAL</h1>", unsafe_allow_html=True)
 st.markdown("<hr style='border: 1px solid #2d303e; margin-top: 0;'>", unsafe_allow_html=True)
 
-# <-- 6 TABS HO GAYE AB -->
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Pro Cash Analyzer", "Live FNO Screener", "Options Alpha 🚀", "Smart Money 🧠", "Ledger 📈", "Time Machine (Backtest) ⏳"])
+# <-- 7 TABS HO GAYE AB -->
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["Pro Cash", "FNO Screener", "Options Alpha", "Smart Money", "Ledger 📈", "Backtester ⏳", "Live Algo Scanner ⚡"])
 
 with tab1: pro_analyzer.render_ui(fyers)
 with tab2: fno_screener.render_ui(fyers)
 with tab3: options_engine.render_ui(fyers)
 with tab4: smart_money.render_ui(fyers)
 with tab5: paper_ledger.render_ui(fyers)
-with tab6: backtest_engine.render_ui(fyers) # <-- BACKTESTER TAB ADDED
+with tab6: backtest_engine.render_ui(fyers)
+with tab7: live_algo_scanner.render_ui(fyers) # <-- NAYA TAB
