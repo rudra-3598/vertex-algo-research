@@ -22,10 +22,6 @@ def load_fno_base_stocks():
 
 fno_base_universe = load_fno_base_stocks()
 
-# --- STATE MANAGEMENT (TO PREVENT DATA VANISHING) ---
-if 'grid_scan_results' not in st.session_state:
-    st.session_state['grid_scan_results'] = []
-
 # --- HELPER FUNCTIONS ---
 def get_current_monthly_expiry():
     now = datetime.datetime.now()
@@ -54,7 +50,7 @@ def get_spot_symbol(sym):
     return f"NSE:{sym}-EQ"
 
 def get_fut_symbol(sym, expiry):
-    if sym in ["NIFTY", "BANKNIFTY"]: return f"NSE:{sym}{expiry}FUT" # Assuming basic index fut format
+    if sym in ["NIFTY", "BANKNIFTY"]: return f"NSE:{sym}{expiry}FUT" 
     return f"NSE:{sym}{expiry}FUT"
 
 # --- FYERS API FETCHER ---
@@ -136,17 +132,14 @@ def email_detailed_setup(fyers, symbol, profile, email, max_risk):
     spot_symbol = get_spot_symbol(symbol)
     fut_symbol = get_fut_symbol(symbol, auto_expiry)
     
-    # 1. Spot Analysis
     df_spot = fetch_fyers_data(fyers, spot_symbol, "15", 5)
     trend, spot_price, spot_sl, spot_tgt, spot_atr, is_squeeze, spot_rationale = analyze_spot_technicals(df_spot)
     
-    # 2. Future/OI Analysis
     df_fut = fetch_fyers_data(fyers, fut_symbol, "15", 2)
     oi_status, oi_details = analyze_oi_buildup(df_fut)
     
     atm_strike = get_atm_strike(symbol, spot_price)
     
-    # 3. Option Selection & Analysis
     if "BULLISH" in trend:
         opt_symbol = f"NSE:{symbol}{auto_expiry}{atm_strike}CE" if profile == "Option Buyer" else f"NSE:{symbol}{auto_expiry}{int(atm_strike - (spot_atr*4))}PE"
         action = f"BUY {atm_strike} CE" if profile == "Option Buyer" else f"SELL {int(atm_strike - (spot_atr*4))} PE"
@@ -173,12 +166,12 @@ def email_detailed_setup(fyers, symbol, profile, email, max_risk):
     risk_per_unit = abs(opt_price - opt_sl)
     rec_quantity = int(max_risk / risk_per_unit) if risk_per_unit > 0 else 0
     
-    # --- DEEP AI SUMMARY ---
+    # Deep AI Summary with Spot, OI, and Premium
     ai_summary = f"""
     <strong>The Triple Confluence Logic:</strong><br>
     <strong>1. Cash Market (Spot):</strong> {spot_rationale} ATR Volatility stands at {spot_atr:.2f}.<br>
     <strong>2. Derivatives Activity (OI):</strong> The Futures chart reveals <strong>{oi_status}</strong> ({oi_details}), confirming that institutional money is aligning with the Spot trend.<br>
-    <strong>3. Premium Analysis:</strong> The {opt_symbol} is trading at Rs. {opt_price:.2f} (VWAP: Rs. {opt_vwap:.2f}). Because you are an <em>{profile}</em>, we are establishing a strict Volatility-Based Stoploss exactly outside the {opt_atr:.2f} ATR band to avoid algorithm stop-hunting.
+    <strong>3. Premium Analysis:</strong> The {opt_symbol} is trading at Rs. {opt_price:.2f} (VWAP: Rs. {opt_vwap:.2f}). Because you are an <em>{profile}</em>, we established a strict Volatility-Based Stoploss exactly outside the {opt_atr:.2f} ATR band to avoid algorithm stop-hunting.
     """
     
     spot_img, opt_img = generate_dual_chart(df_spot, df_opt, symbol, opt_symbol)
@@ -225,6 +218,10 @@ def email_detailed_setup(fyers, symbol, profile, email, max_risk):
 
 # --- MAIN UI RENDERER ---
 def render_ui(fyers):
+    # 👇 MEMORY FIX IS HERE: DATA WILL NEVER VANISH ON BUTTON CLICK 👇
+    if 'grid_scan_results' not in st.session_state:
+        st.session_state['grid_scan_results'] = []
+
     st.markdown("### 🚀 Vertex Institutional Derivatives Engine")
     
     col_a, col_b, col_c = st.columns([1.5, 1, 1.5])
@@ -235,7 +232,6 @@ def render_ui(fyers):
     tab_radar, tab_grid = st.tabs(["🔥 5-Min Hot OI Radar", "📊 Alpha 208-Stock Grid (Cards)"])
     
     with tab_radar:
-        # ... (Same OI Radar code as previous version) ...
         st.write("Scan this every 5 minutes to catch sudden volume and Open Interest spikes in Futures.")
         if st.button("📡 Scan Live OI Radar Now", type="primary"):
             st.info("Scanning Futures market...")
@@ -282,11 +278,11 @@ def render_ui(fyers):
                 time.sleep(0.2) 
                 progress2.progress((i + 1) / total_scan)
             
-            # SAVE TO SESSION STATE SO IT DOESN'T VANISH
+            # SAVING DATA TO SESSION STATE TO PREVENT VANISHING
             st.session_state['grid_scan_results'] = temp_results
             status_text2.text(f"Scan Complete! All cards rendered.")
 
-        # DRAW CARDS FROM SESSION STATE
+        # RENDERING CARDS DIRECTLY FROM SECURE MEMORY
         if st.session_state['grid_scan_results']:
             cols = st.columns(3)
             for i, item in enumerate(st.session_state['grid_scan_results']):
