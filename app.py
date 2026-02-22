@@ -27,7 +27,8 @@ import options_engine
 import smart_money
 import paper_ledger 
 import backtest_engine 
-import live_algo_scanner # <-- NAYA MODULE IMPORT KIYA
+import live_algo_scanner 
+import forward_test_engine # <-- NAYA MODULE IMPORT KIYA
 
 try:
     FYERS_CLIENT_ID = st.secrets["FYERS_CLIENT_ID"]
@@ -77,8 +78,8 @@ fyers = get_fyers_instance()
 st.markdown("<h1 style='text-align: center; color: #4caf50; letter-spacing: 2px;'>VERTEX ALGO | INSTITUTIONAL TERMINAL</h1>", unsafe_allow_html=True)
 st.markdown("<hr style='border: 1px solid #2d303e; margin-top: 0;'>", unsafe_allow_html=True)
 
-# <-- 7 TABS HO GAYE AB -->
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["Pro Cash", "FNO Screener", "Options Alpha", "Smart Money", "Ledger 📈", "Backtester ⏳", "Live Algo Scanner ⚡"])
+# <-- 8 TABS HO GAYE AB -->
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(["Pro Cash", "FNO Screener", "Options Alpha", "Smart Money", "Ledger 📈", "Backtester ⏳", "Live Scanner ⚡", "Auto Forward Test 🤖"])
 
 with tab1: pro_analyzer.render_ui(fyers)
 with tab2: fno_screener.render_ui(fyers)
@@ -86,4 +87,5 @@ with tab3: options_engine.render_ui(fyers)
 with tab4: smart_money.render_ui(fyers)
 with tab5: paper_ledger.render_ui(fyers)
 with tab6: backtest_engine.render_ui(fyers)
-with tab7: live_algo_scanner.render_ui(fyers) # <-- NAYA TAB
+with tab7: live_algo_scanner.render_ui(fyers)
+with tab8: forward_test_engine.render_ui(fyers) # <-- NAYA TAB
