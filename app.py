@@ -33,17 +33,29 @@ def get_fyers_instance():
 # --- DATABASES ---
 @st.cache_data
 def load_all_stocks():
-    try:
-        df = pd.read_csv("nse_stock_data.csv")
-        return [f"NSE:{t.replace('.NS', '')}-EQ" for t in df['tic'].dropna().unique()]
-    except: return ["NSE:HDFCBANK-EQ", "NSE:RELIANCE-EQ", "NSE:TCS-EQ"]
+    if os.path.exists("nse_stock_data.csv"):
+        try:
+            df = pd.read_csv("nse_stock_data.csv")
+            return [f"NSE:{t.replace('.NS', '')}-EQ" for t in df['tic'].dropna().unique()]
+        except Exception as e:
+            st.error(f"Error reading nse_stock_data.csv: {e}")
+            return ["NSE:HDFCBANK-EQ", "NSE:RELIANCE-EQ"]
+    else:
+        st.error("❌ 'nse_stock_data.csv' file aapke GitHub mein nahi mili! Kripya upload karein.")
+        return ["NSE:HDFCBANK-EQ", "NSE:RELIANCE-EQ", "NSE:TCS-EQ", "NSE:INFY-EQ", "NSE:ITC-EQ"]
 
 @st.cache_data
 def load_fno_stocks():
-    try:
-        df = pd.read_csv("nse_fno_stocks.csv")
-        return [f"NSE:{t}-EQ" for t in df['SYMBOL'].dropna().unique()]
-    except: return load_all_stocks()[:50]
+    if os.path.exists("nse_fno_stocks.csv"):
+        try:
+            df = pd.read_csv("nse_fno_stocks.csv")
+            return [f"NSE:{t}-EQ" for t in df['SYMBOL'].dropna().unique()]
+        except Exception as e:
+            st.error(f"Error reading nse_fno_stocks.csv: {e}")
+            return ["NSE:NIFTY-EQ"]
+    else:
+        st.error("❌ 'nse_fno_stocks.csv' file aapke GitHub mein nahi mili! Kripya upload karein.")
+        return load_all_stocks()[:50]
 
 all_universe = load_all_stocks()
 fno_universe = load_fno_stocks()
