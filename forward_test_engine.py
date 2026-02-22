@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import pandas_ta as ta
 import datetime
 import calendar
 import time
@@ -31,156 +32,203 @@ def get_option_symbol(strike, type_ce_pe):
     expiry = get_current_weekly_expiry("NIFTY")
     return f"NSE:NIFTY{expiry}{strike}{type_ce_pe}"
 
-# --- FYERS API FETCHER ---
-def fetch_live_data(fyers, symbol, resolution="5", days_back=1):
+# --- FYERS API FETCHER (UPDATED WITH OI FLAG) ---
+def fetch_live_data(fyers, symbol, resolution="5", days_back=2):
     now = datetime.datetime.now()
     range_from = (now - datetime.timedelta(days=days_back)).strftime("%Y-%m-%d")
     range_to = now.strftime("%Y-%m-%d")
-    data = {"symbol": symbol, "resolution": str(resolution), "date_format": "1", "range_from": range_from, "range_to": range_to, "cont_flag": "1"}
+    # Added oi_flag="1" to specifically fetch Open Interest from Fyers
+    data = {"symbol": symbol, "resolution": str(resolution), "date_format": "1", "range_from": range_from, "range_to": range_to, "cont_flag": "1", "oi_flag": "1"}
     response = fyers.history(data=data)
     if response.get("s") == "ok" and response.get("candles"):
-        df = pd.DataFrame(response["candles"], columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        # Fyers returns 6 items standard, 7 items if OI is requested
+        cols = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+        if len(response["candles"][0]) == 7: cols.append('oi')
+        df = pd.DataFrame(response["candles"], columns=cols)
+        df['datetime'] = pd.to_datetime(df['timestamp'], unit='s') + pd.Timedelta(hours=5, minutes=30)
+        df.set_index('datetime', inplace=True)
         return df
     return None
 
 # --- AUTO EXECUTION TO LEDGER ---
-def auto_execute_paper_trade(strategy_name, action, entry_price):
-    """Automatically silently writes the trade to paper_trades.csv"""
+def auto_execute_paper_trade(strategy_name, action, entry_price, dynamic_sl=None):
     file_exists = os.path.isfile('paper_trades.csv')
     with open('paper_trades.csv', 'a', newline='') as f:
         writer = csv.writer(f)
         if not file_exists:
             writer.writerow(['Date', 'Asset', 'Profile', 'Action', 'Entry', 'Target', 'Stoploss', 'Status', 'Exit_Price', 'PnL'])
         
-        target = round(entry_price * 1.5, 2) # 50% ROI Target
-        sl = round(entry_price * 0.7, 2)     # 30% SL
+        if dynamic_sl:
+            sl = round(dynamic_sl, 2)
+            risk = entry_price - sl if entry_price > sl else entry_price * 0.1
+            target = round(entry_price + (risk * 2), 2)
+        elif "Ravi Bhatt" in strategy_name:
+            # Podcast Logic: Strict 20% Stoploss and 50% Target
+            sl = round(entry_price * 0.80, 2) 
+            target = round(entry_price * 1.50, 2) 
+        else:
+            sl = round(entry_price * 0.7, 2)
+            target = round(entry_price * 1.5, 2)
         
-        writer.writerow([
-            datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), 
-            "NIFTY", 
-            strategy_name, 
-            action, 
-            entry_price, 
-            target, 
-            sl, 
-            'OPEN', 
-            0.0, 0.0
-        ])
+        writer.writerow([datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), "NIFTY", strategy_name, action, entry_price, target, sl, 'OPEN', 0.0, 0.0])
 
 # --- STRATEGY 1: NIFTY OI PREMIUM FLOW ---
 def run_oi_premium_flow(fyers):
-    """
-    Pure OI/Volume Logic: Compares CE vs PE data.
-    If CE Vol & Price goes UP (Long Buildup) AND PE Vol UP & Price DOWN (Short Buildup) -> BUY CE
-    """
-    # 1. Get Spot Price for ATM
-    df_spot = fetch_live_data(fyers, get_spot_symbol())
-    if df_spot is None or len(df_spot) < 2: return "Wait", "Fetching Nifty Spot..."
+    df_spot = fetch_live_data(fyers, get_spot_symbol(), days_back=1)
+    if df_spot is None or len(df_spot) < 2: return "Wait", 0, "Fetching Spot...", None
+    
+    atm_strike = get_atm_strike(df_spot['close'].iloc[-1])
+    ce_sym, pe_sym = get_option_symbol(atm_strike, "CE"), get_option_symbol(atm_strike, "PE")
+    df_ce, df_pe = fetch_live_data(fyers, ce_sym, days_back=1), fetch_live_data(fyers, pe_sym, days_back=1)
+    
+    if df_ce is None or df_pe is None or len(df_ce) < 2 or len(df_pe) < 2: return "Wait", 0, "Fetching Options...", None
+
+    ce_px_chg, ce_vol_chg = df_ce['close'].iloc[-1] - df_ce['close'].iloc[-2], df_ce['volume'].iloc[-1] - df_ce['volume'].iloc[-2]
+    pe_px_chg, pe_vol_chg = df_pe['close'].iloc[-1] - df_pe['close'].iloc[-2], df_pe['volume'].iloc[-1] - df_pe['volume'].iloc[-2]
+
+    if ce_px_chg > 0 and ce_vol_chg > 0 and pe_px_chg < 0 and pe_vol_chg > 0: return "BUY CE", df_ce['close'].iloc[-1], "OI Breakout (CE Builtup)", None
+    elif pe_px_chg > 0 and pe_vol_chg > 0 and ce_px_chg < 0 and ce_vol_chg > 0: return "BUY PE", df_pe['close'].iloc[-1], "OI Breakout (PE Builtup)", None
+    return "Wait", 0, f"Neutral Flow. ATM: {atm_strike}", None
+
+# --- STRATEGY 2: POWER SCALPER (Dual-Timeframe Fixed Logic) ---
+def run_power_scalper(fyers):
+    df_spot = fetch_live_data(fyers, get_spot_symbol(), resolution="5", days_back=5)
+    if df_spot is None or len(df_spot) < 20: return "Wait", 0, "Insufficient Spot Data", None
+
+    df_daily = df_spot.resample('D').agg({'high': 'max', 'low': 'min', 'close': 'last'}).dropna()
+    if len(df_daily) < 2: return "Wait", 0, "Building Pivot Data...", None
+    
+    prev_h, prev_l, prev_c = df_daily['high'].iloc[-2], df_daily['low'].iloc[-2], df_daily['close'].iloc[-2]
+    pp = (prev_h + prev_l + prev_c) / 3
+    r1, s1 = (2 * pp) - prev_l, (2 * pp) - prev_h
+    r2, s2 = pp + (prev_h - prev_l), pp - (prev_h - prev_l)
+    
+    curr_close, prev_close = df_spot['close'].iloc[-1], df_spot['close'].iloc[-2]
+    bullish_breakout = (curr_close > pp and prev_close <= pp) or (curr_close > r1 and prev_close <= r1) or (curr_close > r2 and prev_close <= r2)
+    bearish_breakout = (curr_close < pp and prev_close >= pp) or (curr_close < s1 and prev_close >= s1) or (curr_close < s2 and prev_close >= s2)
+
+    if not (bullish_breakout or bearish_breakout): return "Wait", curr_close, f"Spot ₹{curr_close:.1f}. Waiting for 5-Min Pivot close.", None
+
+    opt_type = "CE" if bullish_breakout else "PE"
+    opt_sym = get_option_symbol(get_atm_strike(curr_close), opt_type)
+    
+    df_opt = fetch_live_data(fyers, opt_sym, resolution="2", days_back=2)
+    if df_opt is None or len(df_opt) < 15: return "Wait", curr_close, f"Spot Breakout! Fetching {opt_sym}...", None
+
+    df_opt.ta.supertrend(length=10, multiplier=3.0, append=True)
+    df_opt.ta.rsi(length=14, append=True)
+    
+    st_dir_col, st_val_col = [c for c in df_opt.columns if 'SUPERTd' in c][0], [c for c in df_opt.columns if 'SUPERT_' in c][0]
+    if df_opt[st_dir_col].iloc[-1] == 1 and df_opt['RSI_14'].iloc[-1] >= 60:
+        return f"BUY {opt_type}", df_opt['close'].iloc[-1], f"🔥 5m Pivot + 2m RSI. BUY {opt_sym}!", df_opt[st_val_col].iloc[-1]
+
+    return "Wait", curr_close, f"Breakout Confirmed, but {opt_sym} missing RSI/ST Momentum.", None
+
+# --- STRATEGY 3: RAVI BHATT 500% OI SPIKE (MASTERS IN ONE) ---
+def run_ravi_bhatt_oi(fyers):
+    df_spot = fetch_live_data(fyers, get_spot_symbol(), days_back=1)
+    if df_spot is None or len(df_spot) < 2: return "Wait", 0, "Fetching Spot...", None
     
     current_spot = df_spot['close'].iloc[-1]
     atm_strike = get_atm_strike(current_spot)
     
-    # 2. Fetch ATM CE and PE Data
-    ce_sym = get_option_symbol(atm_strike, "CE")
-    pe_sym = get_option_symbol(atm_strike, "PE")
-    
-    df_ce = fetch_live_data(fyers, ce_sym)
-    df_pe = fetch_live_data(fyers, pe_sym)
+    ce_sym, pe_sym = get_option_symbol(atm_strike, "CE"), get_option_symbol(atm_strike, "PE")
+    df_ce, df_pe = fetch_live_data(fyers, ce_sym, days_back=2), fetch_live_data(fyers, pe_sym, days_back=2)
     
     if df_ce is None or df_pe is None or len(df_ce) < 2 or len(df_pe) < 2:
-        return "Wait", "Fetching Option Chain Data..."
+        return "Wait", 0, "Fetching Institutional OI Data...", None
 
-    # 3. OI/Volume Momentum Math (Comparing last 2 candles)
-    ce_price_change = df_ce['close'].iloc[-1] - df_ce['close'].iloc[-2]
-    ce_vol_change = df_ce['volume'].iloc[-1] - df_ce['volume'].iloc[-2]
-    ce_ltp = df_ce['close'].iloc[-1]
+    # Fallback to cumulative volume if Fyers API fails to return exact OI flag on certain accounts
+    if 'oi' not in df_ce.columns: df_ce['oi'] = df_ce['volume'].cumsum()
+    if 'oi' not in df_pe.columns: df_pe['oi'] = df_pe['volume'].cumsum()
+
+    # Calculate base OI (Yesterday's approx) vs Current OI
+    base_oi_ce = max(df_ce['oi'].iloc[0], 1)
+    base_oi_pe = max(df_pe['oi'].iloc[0], 1)
     
-    pe_price_change = df_pe['close'].iloc[-1] - df_pe['close'].iloc[-2]
-    pe_vol_change = df_pe['volume'].iloc[-1] - df_pe['volume'].iloc[-2]
-    pe_ltp = df_pe['close'].iloc[-1]
+    curr_oi_ce, curr_oi_pe = df_ce['oi'].iloc[-1], df_pe['oi'].iloc[-1]
+    
+    ce_oi_change = ((curr_oi_ce - base_oi_ce) / base_oi_ce) * 100
+    pe_oi_change = ((curr_oi_pe - base_oi_pe) / base_oi_pe) * 100
+    
+    ce_ltp, pe_ltp = df_ce['close'].iloc[-1], df_pe['close'].iloc[-1]
 
-    # LOGIC 1: BULLISH (CE Long Buildup + PE Short Writing)
-    if ce_price_change > 0 and ce_vol_change > 0 and pe_price_change < 0 and pe_vol_change > 0:
-        return "BUY CE", ce_ltp
-        
-    # LOGIC 2: BEARISH (PE Long Buildup + CE Short Writing)
-    elif pe_price_change > 0 and pe_vol_change > 0 and ce_price_change < 0 and ce_vol_change > 0:
-        return "BUY PE", pe_ltp
+    # RAVI BHATT LOGIC: > 500% OI Spike
+    if pe_oi_change >= 500:
+        return "BUY CE", ce_ltp, f"🔥 PE OI Spiked {pe_oi_change:.1f}%! Insti Put Selling.", None
+    elif ce_oi_change >= 500:
+        return "BUY PE", pe_ltp, f"🔥 CE OI Spiked {ce_oi_change:.1f}%! Insti Call Selling.", None
 
-    return "Neutral", f"Smart Money is consolidating. ATM Strike: {atm_strike}"
+    return "Wait", current_spot, f"Tracking OI Change: CE +{ce_oi_change:.0f}% | PE +{pe_oi_change:.0f}%", None
 
 # --- UI RENDERER ---
 def render_ui(fyers):
-    # Initialize Memory for Auto-Trades to avoid spamming the CSV every 5 mins
-    if 'last_oi_trade_time' not in st.session_state:
-        st.session_state['last_oi_trade_time'] = None
+    if 'last_oi_trade_time' not in st.session_state: st.session_state['last_oi_trade_time'] = None
+    if 'last_scalper_trade_time' not in st.session_state: st.session_state['last_scalper_trade_time'] = None
+    if 'last_ravi_trade_time' not in st.session_state: st.session_state['last_ravi_trade_time'] = None
 
     st.markdown("### 🤖 Fully Automated Forward Testing Engine")
-    st.write("Turn on the engine. It will silently run in the background, detect strategy criteria, and automatically execute paper trades into your Ledger.")
+    st.write("Engine silently runs multi-timeframe algos in the background and auto-executes into your Ledger.")
     
-    # ---------------------------------------------------------
-    # TOP CONTROL PANEL
-    # ---------------------------------------------------------
     head_col1, head_col2 = st.columns([3, 1])
-    with head_col1:
-        st.info("System will execute a maximum of 1 trade per strategy every 30 minutes to prevent over-trading.")
+    with head_col1: st.info("Cooldown Timer: Max 1 trade per strategy every 30 minutes to prevent noise trading.")
     with head_col2:
         engine_on = st.toggle("🟢 Master Engine ON", value=False)
         if engine_on:
-            # Refreshes the page every 3 minutes silently
             st_autorefresh(interval=3 * 60 * 1000, key="fw_test_refresh")
             st.success("Auto-Pilot Running in Background")
 
     st.markdown("---")
     st.markdown("#### Active Strategy Cards")
-    
-    # ---------------------------------------------------------
-    # STRATEGY CARD 1: NIFTY OI PREMIUM FLOW
-    # ---------------------------------------------------------
     col_s1, col_s2, col_s3 = st.columns(3)
     
     with col_s1:
         st.markdown(f"""
         <div style="background-color: #1a1c23; border-top: 5px solid #1f77b4; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
-            <h3 style="margin: 0; color: #fff; font-size: 18px;">Nifty OI Premium Flow</h3>
-            <p style="color: #888; font-size: 12px; margin-top: 5px;">Pure Open Interest & Volume logic. Detects divergence between CE and PE smart money writing.</p>
-            <div style="margin-top: 15px;">
-                <span style="background-color: #2b313c; color: #4caf50; padding: 3px 8px; border-radius: 4px; font-size: 11px;">Status: ACTIVE</span>
-            </div>
+            <h3 style="margin: 0; color: #fff; font-size: 18px;">Nifty Premium Flow</h3>
+            <p style="color: #888; font-size: 12px; margin-top: 5px;">Detects divergence between CE and PE smart money writing based on Volume & Price.</p>
+            <div style="margin-top: 15px;"><span style="background-color: #2b313c; color: #4caf50; padding: 3px 8px; border-radius: 4px; font-size: 11px;">Status: ACTIVE</span></div>
         </div>
         """, unsafe_allow_html=True)
-        
-        # Background Execution Logic
         if engine_on:
-            signal, data = run_oi_premium_flow(fyers)
-            
-            # Rate Limiter: Only take a trade if 30 mins have passed since the last one
-            now = datetime.datetime.now()
-            can_trade = True
-            if st.session_state['last_oi_trade_time'] is not None:
-                time_diff = (now - st.session_state['last_oi_trade_time']).total_seconds() / 60
-                if time_diff < 30:
-                    can_trade = False
-
+            signal, data, msg, st_sl = run_oi_premium_flow(fyers)
+            can_trade = True if not st.session_state['last_oi_trade_time'] else (datetime.datetime.now() - st.session_state['last_oi_trade_time']).total_seconds() / 60 > 30
             if "BUY" in signal and can_trade:
-                auto_execute_paper_trade("Nifty OI Flow Auto", signal, data)
-                st.session_state['last_oi_trade_time'] = now
-                st.toast(f"🤖 Auto-Executed: {signal} at Rs.{data}")
-            elif not can_trade:
-                st.caption(f"Cooling down. Last trade was recently.")
-            else:
-                st.caption(f"Live Status: {data}")
+                auto_execute_paper_trade("OI Premium Flow", signal, data)
+                st.session_state['last_oi_trade_time'] = datetime.datetime.now(); st.toast(f"🤖 OI Algo Executed: {signal} at Rs.{data}")
+            elif not can_trade: st.caption("Cooling down.")
+            else: st.caption(f"Live Status: {msg}")
 
-    # ---------------------------------------------------------
-    # STRATEGY CARD 2: PLACEHOLDER FOR FUTURE
-    # ---------------------------------------------------------
     with col_s2:
         st.markdown(f"""
-        <div style="background-color: #1a1c23; border-top: 5px solid #404654; padding: 20px; border-radius: 8px; opacity: 0.6;">
-            <h3 style="margin: 0; color: #fff; font-size: 18px;">[Empty Slot]</h3>
-            <p style="color: #888; font-size: 12px; margin-top: 5px;">Add your next proprietary algorithm here. System scales horizontally.</p>
-            <div style="margin-top: 15px;">
-                <span style="background-color: #2b313c; color: #888; padding: 3px 8px; border-radius: 4px; font-size: 11px;">Status: OFFLINE</span>
-            </div>
+        <div style="background-color: #1a1c23; border-top: 5px solid #ff9800; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
+            <h3 style="margin: 0; color: #fff; font-size: 18px;">Power Scalper (Dual)</h3>
+            <p style="color: #888; font-size: 12px; margin-top: 5px;">Spot 5-Min Pivot breakouts aligned with Option 2-Min SuperTrend & RSI > 60.</p>
+            <div style="margin-top: 15px;"><span style="background-color: #2b313c; color: #ff9800; padding: 3px 8px; border-radius: 4px; font-size: 11px;">Status: ACTIVE ⚡</span></div>
         </div>
         """, unsafe_allow_html=True)
+        if engine_on:
+            signal, data, msg, st_sl = run_power_scalper(fyers)
+            can_trade = True if not st.session_state['last_scalper_trade_time'] else (datetime.datetime.now() - st.session_state['last_scalper_trade_time']).total_seconds() / 60 > 30
+            if "BUY" in signal and can_trade:
+                auto_execute_paper_trade("Power Scalper (Dual)", signal, data, dynamic_sl=st_sl)
+                st.session_state['last_scalper_trade_time'] = datetime.datetime.now(); st.toast(f"⚡ Scalper Executed: {signal} at Rs.{data}")
+            elif not can_trade: st.caption("Cooling down.")
+            else: st.caption(f"Live Status: {msg}")
+
+    with col_s3:
+        st.markdown(f"""
+        <div style="background-color: #1a1c23; border-top: 5px solid #e91e63; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3);">
+            <h3 style="margin: 0; color: #fff; font-size: 18px;">Ravi Bhatt OI Spike</h3>
+            <p style="color: #888; font-size: 12px; margin-top: 5px;">Pure Option Buying Math. Triggers when Change in Option OI exceeds 500%.</p>
+            <div style="margin-top: 15px;"><span style="background-color: #2b313c; color: #e91e63; padding: 3px 8px; border-radius: 4px; font-size: 11px;">Status: ACTIVE 📊</span></div>
+        </div>
+        """, unsafe_allow_html=True)
+        if engine_on:
+            signal, data, msg, st_sl = run_ravi_bhatt_oi(fyers)
+            can_trade = True if not st.session_state['last_ravi_trade_time'] else (datetime.datetime.now() - st.session_state['last_ravi_trade_time']).total_seconds() / 60 > 30
+            if "BUY" in signal and can_trade:
+                auto_execute_paper_trade("Ravi Bhatt 500% OI", signal, data)
+                st.session_state['last_ravi_trade_time'] = datetime.datetime.now(); st.toast(f"📊 Ravi Bhatt Executed: {signal} at Rs.{data}")
+            elif not can_trade: st.caption("Cooling down.")
+            else: st.caption(f"Live Status: {msg}")
