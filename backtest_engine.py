@@ -20,7 +20,6 @@ def load_fno_base_stocks():
 fno_base_universe = load_fno_base_stocks()
 mcx_universe = ["CRUDEOIL", "GOLD", "GOLDM", "SILVER", "SILVERMIC", "NATURALGAS", "COPPER", "ZINC"]
 
-# --- HELPER FUNCTIONS ---
 def get_current_monthly_expiry():
     now = datetime.datetime.now()
     cal = calendar.monthcalendar(now.year, now.month)
@@ -55,23 +54,16 @@ def fetch_historical_data(fyers, symbol, resolution, days_back):
 
 # --- OPTIONS MATH SIMULATOR ---
 def calculate_option_pnl(spot_pnl, holding_time_mins, spot_price):
-    """
-    Simulates ATM Option Premium PnL:
-    1. Delta Approximation = 0.50 (ATM options move 50% of the spot price)
-    2. Theta Decay = Premium loses roughly 0.0000015 of Spot Value per minute held.
-    """
     delta_pnl = spot_pnl * 0.50 
     theta_decay = holding_time_mins * (spot_price * 0.0000015) 
-    option_pnl = delta_pnl - theta_decay
-    return option_pnl
+    return delta_pnl - theta_decay
 
 # =====================================================================
-# STRATEGY 1: DIXON SUPERTREND (USER'S PINE SCRIPT)
+# STRATEGY 1: DIXON SUPERTREND
 # =====================================================================
 def run_dixon_backtest(df, use_time_filter=True, skip_tuesday=True, is_option_mode=False):
     df.ta.supertrend(length=10, multiplier=3.0, append=True)
     df.ta.vwap(append=True); df.ta.atr(length=14, append=True)
-    
     st_cols = [c for c in df.columns if 'SUPERTd' in c]
     if not st_cols: return pd.DataFrame(), []
     st_dir_col = st_cols[0]
@@ -83,12 +75,11 @@ def run_dixon_backtest(df, use_time_filter=True, skip_tuesday=True, is_option_mo
     
     df['is_tuesday'] = df['dayofweek'] == 1
     df['is_afternoon'] = (df['hour'] > 12) | ((df['hour'] == 12) & (df['minute'] >= 30))
-    df['is_morning'] = ~df['is_afternoon']
     df['trade_allowed'] = ~df['is_tuesday'] if skip_tuesday else True
     
     if use_time_filter:
         df['long_cond'] = df['st_buy_signal'] & (df['close'] > df['VWAP_D']) & df['trade_allowed'] & df['is_afternoon']
-        df['short_cond'] = df['st_sell_signal'] & (df['close'] < df['VWAP_D']) & df['trade_allowed'] & df['is_morning']
+        df['short_cond'] = df['st_sell_signal'] & (df['close'] < df['VWAP_D']) & df['trade_allowed'] & ~df['is_afternoon']
     else:
         df['long_cond'] = df['st_buy_signal'] & (df['close'] > df['VWAP_D']) & df['trade_allowed']
         df['short_cond'] = df['st_sell_signal'] & (df['close'] < df['VWAP_D']) & df['trade_allowed']
@@ -100,10 +91,7 @@ def run_dixon_backtest(df, use_time_filter=True, skip_tuesday=True, is_option_mo
     for index, row in df.iterrows():
         if in_trade:
             close, high, low, vwap, st_dir = row['close'], row['high'], row['low'], row['VWAP_D'], row[st_dir_col] 
-            exit_triggered = False
-            spot_pnl = 0
-            exit_reason = ""
-            exit_price = 0
+            exit_triggered, spot_pnl, exit_reason, exit_price = False, 0, "", 0
             
             if trade_type == "LONG":
                 highest_seen = max(highest_seen, high)
@@ -111,11 +99,8 @@ def run_dixon_backtest(df, use_time_filter=True, skip_tuesday=True, is_option_mo
                     trail_active, trail_sl = True, highest_seen - (1.0 * atr_at_entry)
                 if trail_active:
                     trail_sl = max(trail_sl, highest_seen - (1.0 * atr_at_entry))
-                    if low <= trail_sl:
-                        spot_pnl, exit_price, exit_reason, exit_triggered = trail_sl - entry_price, trail_sl, "Trailing SL", True
-                
-                if not exit_triggered and (close < vwap or st_dir == -1):
-                    spot_pnl, exit_price, exit_reason, exit_triggered = close - entry_price, close, "Hard SL", True
+                    if low <= trail_sl: spot_pnl, exit_price, exit_reason, exit_triggered = trail_sl - entry_price, trail_sl, "Trailing SL", True
+                if not exit_triggered and (close < vwap or st_dir == -1): spot_pnl, exit_price, exit_reason, exit_triggered = close - entry_price, close, "Hard SL", True
 
             elif trade_type == "SHORT":
                 lowest_seen = min(lowest_seen, low)
@@ -123,25 +108,14 @@ def run_dixon_backtest(df, use_time_filter=True, skip_tuesday=True, is_option_mo
                     trail_active, trail_sl = True, lowest_seen + (1.0 * atr_at_entry)
                 if trail_active:
                     trail_sl = min(trail_sl, lowest_seen + (1.0 * atr_at_entry))
-                    if high >= trail_sl:
-                        spot_pnl, exit_price, exit_reason, exit_triggered = entry_price - trail_sl, trail_sl, "Trailing SL", True
-                
-                if not exit_triggered and (close > vwap or st_dir == 1):
-                    spot_pnl, exit_price, exit_reason, exit_triggered = entry_price - close, close, "Hard SL", True
+                    if high >= trail_sl: spot_pnl, exit_price, exit_reason, exit_triggered = entry_price - trail_sl, trail_sl, "Trailing SL", True
+                if not exit_triggered and (close > vwap or st_dir == 1): spot_pnl, exit_price, exit_reason, exit_triggered = entry_price - close, close, "Hard SL", True
 
             if exit_triggered:
                 holding_mins = (index - entry_time).total_seconds() / 60
-                
-                # Apply Option Greeks Math if Mode is ON
-                if is_option_mode:
-                    final_pnl = calculate_option_pnl(spot_pnl, holding_mins, entry_price)
-                    trade_type_txt = f"{trade_type} (BUY ATM {'CE' if trade_type=='LONG' else 'PE'})"
-                else:
-                    final_pnl = spot_pnl
-                    trade_type_txt = trade_type
-                    
+                final_pnl = calculate_option_pnl(spot_pnl, holding_mins, entry_price) if is_option_mode else spot_pnl
                 cumulative_pnl += final_pnl
-                trade_log.append({"Entry_Date": entry_time, "Exit_Date": index, "Type": trade_type_txt, "Spot Entry": entry_price, "Spot Exit": exit_price, "Hold Time(m)": int(holding_mins), "Final PnL": final_pnl, "Reason": exit_reason})
+                trade_log.append({"Entry": entry_time, "Exit": index, "Type": trade_type, "Entry_Px": entry_price, "Exit_Px": exit_price, "Mins": int(holding_mins), "PnL": final_pnl, "Reason": exit_reason})
                 in_trade = False
 
         if not in_trade: 
@@ -166,11 +140,7 @@ def run_triple_confluence(df, is_option_mode=False):
 
     for index, row in df.iterrows():
         if in_trade:
-            exit_triggered = False
-            spot_pnl = 0
-            exit_reason = ""
-            exit_price = 0
-            
+            exit_triggered, spot_pnl, exit_reason, exit_price = False, 0, "", 0
             if trade_type == "LONG":
                 if row['low'] <= sl: spot_pnl, exit_price, exit_reason, exit_triggered = sl - entry_price, sl, "Stoploss", True
                 elif row['high'] >= tgt: spot_pnl, exit_price, exit_reason, exit_triggered = tgt - entry_price, tgt, "Target", True
@@ -180,16 +150,9 @@ def run_triple_confluence(df, is_option_mode=False):
 
             if exit_triggered:
                 holding_mins = (index - entry_time).total_seconds() / 60
-                
-                if is_option_mode:
-                    final_pnl = calculate_option_pnl(spot_pnl, holding_mins, entry_price)
-                    trade_type_txt = f"{trade_type} (BUY ATM {'CE' if trade_type=='LONG' else 'PE'})"
-                else:
-                    final_pnl = spot_pnl
-                    trade_type_txt = trade_type
-                    
+                final_pnl = calculate_option_pnl(spot_pnl, holding_mins, entry_price) if is_option_mode else spot_pnl
                 cumulative_pnl += final_pnl
-                trade_log.append({"Entry_Date": entry_time, "Exit_Date": index, "Type": trade_type_txt, "Spot Entry": entry_price, "Spot Exit": exit_price, "Hold Time(m)": int(holding_mins), "Final PnL": final_pnl, "Reason": exit_reason})
+                trade_log.append({"Entry": entry_time, "Exit": index, "Type": trade_type, "Entry_Px": entry_price, "Exit_Px": exit_price, "Mins": int(holding_mins), "PnL": final_pnl, "Reason": exit_reason})
                 in_trade = False
             
             equity_curve.append(cumulative_pnl)
@@ -205,12 +168,74 @@ def run_triple_confluence(df, is_option_mode=False):
         equity_curve.append(cumulative_pnl)
     return pd.DataFrame(trade_log), equity_curve
 
+# =====================================================================
+# STRATEGY 3: YOUTUBE POWER SCALPER (SuperTrend + RSI Blast)
+# =====================================================================
+def run_power_scalper(df, is_option_mode=False):
+    # Core Indicators from Dhan Power Scalper Video
+    df.ta.supertrend(length=10, multiplier=3.0, append=True)
+    df.ta.rsi(length=14, append=True)
+    df.ta.atr(length=14, append=True)
+    
+    st_cols = [c for c in df.columns if 'SUPERTd' in c]
+    if not st_cols: return pd.DataFrame(), []
+    st_dir_col = st_cols[0]
+    
+    df['prev_st_dir'] = df[st_dir_col].shift(1)
+    df['prev_rsi'] = df['RSI_14'].shift(1)
+    
+    # LONG: Supertrend is Green AND RSI crosses above 60 (Momentum Burst)
+    df['long_cond'] = (df[st_dir_col] == 1) & (df['RSI_14'] > 60) & (df['prev_rsi'] <= 60)
+    # SHORT: Supertrend is Red AND RSI crosses below 40
+    df['short_cond'] = (df[st_dir_col] == -1) & (df['RSI_14'] < 40) & (df['prev_rsi'] >= 40)
+
+    trade_log, equity_curve, cumulative_pnl = [], [0], 0
+    in_trade, trade_type, entry_price, entry_time = False, None, 0, None
+    sl = 0
+
+    for index, row in df.iterrows():
+        if in_trade:
+            close, high, low, st_dir = row['close'], row['high'], row['low'], row[st_dir_col]
+            exit_triggered, spot_pnl, exit_reason, exit_price = False, 0, "", 0
+            
+            # Scalping Logic: Trail tightly with Supertrend or Scalp Target (1.5x ATR)
+            if trade_type == "LONG":
+                if st_dir == -1 or close < sl: spot_pnl, exit_price, exit_reason, exit_triggered = close - entry_price, close, "Momentum Lost/SL", True
+                elif high >= entry_price + (row['ATRr_14'] * 1.5): spot_pnl, exit_price, exit_reason, exit_triggered = (row['ATRr_14'] * 1.5), entry_price + (row['ATRr_14'] * 1.5), "Scalp Target Hit", True
+            elif trade_type == "SHORT":
+                if st_dir == 1 or close > sl: spot_pnl, exit_price, exit_reason, exit_triggered = entry_price - close, close, "Momentum Lost/SL", True
+                elif low <= entry_price - (row['ATRr_14'] * 1.5): spot_pnl, exit_price, exit_reason, exit_triggered = (row['ATRr_14'] * 1.5), entry_price - (row['ATRr_14'] * 1.5), "Scalp Target Hit", True
+
+            if exit_triggered:
+                holding_mins = (index - entry_time).total_seconds() / 60
+                final_pnl = calculate_option_pnl(spot_pnl, holding_mins, entry_price) if is_option_mode else spot_pnl
+                cumulative_pnl += final_pnl
+                trade_log.append({"Entry": entry_time, "Exit": index, "Type": trade_type, "Entry_Px": entry_price, "Exit_Px": exit_price, "Mins": int(holding_mins), "PnL": final_pnl, "Reason": exit_reason})
+                in_trade = False
+            
+            equity_curve.append(cumulative_pnl)
+            continue
+
+        if not in_trade:
+            if row['long_cond']:
+                in_trade, trade_type, entry_price, entry_time = True, "LONG", row['close'], index
+                sl = row['close'] - row['ATRr_14'] # Scalper tight 1x ATR Stoploss
+            elif row['short_cond']:
+                in_trade, trade_type, entry_price, entry_time = True, "SHORT", row['close'], index
+                sl = row['close'] + row['ATRr_14']
+        equity_curve.append(cumulative_pnl)
+    return pd.DataFrame(trade_log), equity_curve
+
 # --- UI RENDERER ---
 def render_ui(fyers):
     st.markdown("### ⏳ The Multi-Strategy Time Machine")
-    st.write("Backtest your algorithms. Select **Options Mode** to simulate exact ATM Premium decay using Delta/Theta math.")
     
-    selected_strategy = st.selectbox("Select Trading Algorithm", ["Dixon (SuperTrend + VWAP + ATR Trail)", "Triple Confluence (VWAP + EMA21 + RSI)"])
+    # STRATEGY SELECTOR UPDATED WITH 3 OPTIONS
+    selected_strategy = st.selectbox("Select Trading Algorithm", [
+        "Power Scalper (YT: SuperTrend + RSI Blast) ⚡", 
+        "Dixon (SuperTrend + VWAP + ATR Trail)", 
+        "Triple Confluence (VWAP + EMA21 + RSI)"
+    ])
     st.markdown("---")
     
     col_m1, col_m2, col_m3 = st.columns([1, 1.5, 1])
@@ -235,31 +260,31 @@ def render_ui(fyers):
             with col_f2: skip_tue = st.checkbox("Skip Tuesdays", value=True)
             
     st.markdown("---")
-    # THE OPTIONS BACKTESTING TOGGLE
-    is_opt_mode = st.checkbox("🔥 Run Backtest on ATM Options (Greek Simulator)", value=False, help="Converts Spot PnL to expected ATM Premium PnL applying 0.5 Delta and Theta Time Decay.")
+    is_opt_mode = st.checkbox("🔥 Run Backtest on ATM Options (Greek Simulator)", value=False)
     st.write("")
     
-    run_btn = st.button(f"🔬 Run {selected_strategy} Backtest", use_container_width=True, type="primary")
+    run_btn = st.button(f"🔬 Run {selected_strategy.split('(')[0]}Backtest", use_container_width=True, type="primary")
         
     if run_btn:
         st.markdown("---")
-        with st.spinner(f"Fetching data from Exchange for {fetch_sym}..."):
+        with st.spinner(f"Fetching data for {fetch_sym}..."):
             df = fetch_historical_data(fyers, fetch_sym, test_tf, test_duration)
             
             if df is not None and not df.empty:
-                with st.spinner("Compiling Math & Executing Virtual Trades..."):
+                with st.spinner("Executing Virtual Trades..."):
                     if "Dixon" in selected_strategy:
                         trades_df, equity_curve = run_dixon_backtest(df, use_time_filter=use_time, skip_tuesday=skip_tue, is_option_mode=is_opt_mode)
+                    elif "Power Scalper" in selected_strategy:
+                        trades_df, equity_curve = run_power_scalper(df, is_option_mode=is_opt_mode)
                     else:
                         trades_df, equity_curve = run_triple_confluence(df, is_option_mode=is_opt_mode)
                     
                 if not trades_df.empty:
                     total_trades = len(trades_df)
-                    wins = len(trades_df[trades_df['Final PnL'] > 0])
+                    wins = len(trades_df[trades_df['PnL'] > 0])
                     win_rate = (wins / total_trades) * 100 if total_trades > 0 else 0
-                    total_points = trades_df['Final PnL'].sum()
+                    total_points = trades_df['PnL'].sum()
                     
-                    # --- METRICS UI ---
                     pnl_label = "Premium Points (Options Mode)" if is_opt_mode else "Net PnL (Spot Points)"
                     m1, m2, m3, m4 = st.columns(4)
                     with m1: st.markdown(f"""<div style="background-color:#1a1c23; padding:15px; border-radius:6px; border: 1px solid #404654; text-align:center;"><h4 style="margin:0; color:#888;">Total Trades</h4><h2 style="margin:0; color:#fff;">{total_trades}</h2></div>""", unsafe_allow_html=True)
@@ -269,14 +294,14 @@ def render_ui(fyers):
                     with m3:
                         pnl_color = "#4caf50" if total_points > 0 else "#ff5252"
                         st.markdown(f"""<div style="background-color:#1a1c23; padding:15px; border-radius:6px; border: 1px solid {pnl_color}; text-align:center;"><h4 style="margin:0; color:#888;">{pnl_label}</h4><h2 style="margin:0; color:{pnl_color};">{total_points:+.2f}</h2></div>""", unsafe_allow_html=True)
-                    with m4: st.markdown(f"""<div style="background-color:#1a1c23; padding:15px; border-radius:6px; border: 1px solid #1f77b4; text-align:center;"><h4 style="margin:0; color:#888;">Mode</h4><h2 style="margin:0; color:#1f77b4; font-size:16px; margin-top:10px;">{'ATM Option Buyer' if is_opt_mode else 'Spot/Futures'}</h2></div>""", unsafe_allow_html=True)
+                    with m4: st.markdown(f"""<div style="background-color:#1a1c23; padding:15px; border-radius:6px; border: 1px solid #1f77b4; text-align:center;"><h4 style="margin:0; color:#888;">Mode</h4><h2 style="margin:0; color:#1f77b4; font-size:16px; margin-top:10px;">{'Options (Gamma Blast)' if is_opt_mode else 'Spot/Futures'}</h2></div>""", unsafe_allow_html=True)
                     
                     st.markdown("### 📈 Cumulative Equity Curve")
                     st.area_chart(equity_curve, color="#1f77b4")
                     
                     st.markdown("### 📜 Detailed Trade Log")
-                    st.dataframe(trades_df.style.applymap(lambda x: 'background-color: rgba(44, 160, 44, 0.2); color: #4caf50;' if x > 0 else 'background-color: rgba(214, 39, 40, 0.2); color: #ff5252;' if x < 0 else '', subset=['Final PnL']), use_container_width=True)
+                    st.dataframe(trades_df.style.applymap(lambda x: 'background-color: rgba(44, 160, 44, 0.2); color: #4caf50;' if x > 0 else 'background-color: rgba(214, 39, 40, 0.2); color: #ff5252;' if x < 0 else '', subset=['PnL']), use_container_width=True)
                 else:
-                    st.warning("No trades triggered. Try relaxing the strategy filters or increasing the lookback period.")
+                    st.warning("No trades triggered. Try a different timeframe or asset.")
             else:
                 st.error("Data Fetch Failed.")
