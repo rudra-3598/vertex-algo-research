@@ -2,14 +2,105 @@ import streamlit as st
 import os
 from fyers_apiv3 import fyersModel
 
+# --- SETTING PAGE CONFIG FIRST ---
+st.set_page_config(page_title="Vertex Algo | Pro Terminal", page_icon="⚡", layout="wide", initial_sidebar_state="expanded")
+
+# --- CUSTOM CSS INJECTION (INSTITUTIONAL DARK THEME) ---
+st.markdown("""
+<style>
+    /* Main Background & Text */
+    .stApp {
+        background-color: #0e1117;
+        color: #e0e0e0;
+        font-family: 'Inter', 'Segoe UI', sans-serif;
+    }
+    
+    /* Sidebar Styling */
+    [data-testid="stSidebar"] {
+        background-color: #1a1c23;
+        border-right: 1px solid #2d303e;
+    }
+    
+    /* Sleek Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 10px;
+        background-color: transparent;
+    }
+    .stTabs [data-baseweb="tab"] {
+        background-color: #1a1c23;
+        border-radius: 4px 4px 0px 0px;
+        color: #a0aab2;
+        border: 1px solid #2d303e;
+        border-bottom: none;
+        padding: 10px 20px;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #2b313c;
+        color: #4caf50;
+        border-top: 2px solid #4caf50;
+        font-weight: bold;
+    }
+    
+    /* Modern Buttons */
+    .stButton > button {
+        background-color: #2b313c;
+        color: #ffffff;
+        border: 1px solid #404654;
+        border-radius: 4px;
+        transition: all 0.2s ease-in-out;
+        font-weight: 500;
+    }
+    .stButton > button:hover {
+        background-color: #4caf50;
+        border-color: #4caf50;
+        box-shadow: 0 0 10px rgba(76, 175, 80, 0.4);
+    }
+    /* Primary Action Buttons */
+    .stButton > button[kind="primary"] {
+        background-color: #1f77b4;
+        border: none;
+    }
+    .stButton > button[kind="primary"]:hover {
+        background-color: #2196f3;
+        box-shadow: 0 0 10px rgba(33, 150, 243, 0.5);
+    }
+
+    /* Input Fields */
+    .stTextInput>div>div>input, .stNumberInput>div>div>input {
+        background-color: #1a1c23;
+        color: #fff;
+        border: 1px solid #2d303e;
+    }
+    .stTextInput>div>div>input:focus, .stNumberInput>div>div>input:focus {
+        border-color: #4caf50;
+        box-shadow: 0 0 5px rgba(76, 175, 80, 0.3);
+    }
+
+    /* Expander/Accordions */
+    .streamlit-expanderHeader {
+        background-color: #1a1c23;
+        color: #e0e0e0;
+        border-radius: 4px;
+    }
+    
+    /* Metrics / Callouts */
+    div[data-testid="stMetricValue"] {
+        color: #fff;
+    }
+    .stAlert {
+        background-color: rgba(30, 34, 45, 0.8) !important;
+        color: #e0e0e0 !important;
+        border: 1px solid #2d303e !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # --- IMPORTING OUR CUSTOM MODULES ---
 import pro_analyzer
 import fno_screener
 import options_engine
 import smart_money
-import paper_ledger  # <-- NAYA MODULE IMPORT KIYA
-
-st.set_page_config(page_title="Vertex Algo | Pro Terminal", layout="wide")
+import paper_ledger 
 
 try:
     FYERS_CLIENT_ID = st.secrets["FYERS_CLIENT_ID"]
@@ -58,13 +149,15 @@ with st.sidebar.expander("🔐 Fyers Admin Auth"):
 if not st.session_state['fyers_access_token']: st.warning("🔒 Terminal Locked."); st.stop()
 
 fyers = get_fyers_instance()
-st.title("Institutional Trading Terminal")
 
-# <-- 5 TABS HO GAYE AB -->
+# Custom Styling for Main Title
+st.markdown("<h1 style='text-align: center; color: #4caf50; letter-spacing: 2px;'>VERTEX ALGO | INSTITUTIONAL TERMINAL</h1>", unsafe_allow_html=True)
+st.markdown("<hr style='border: 1px solid #2d303e; margin-top: 0;'>", unsafe_allow_html=True)
+
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["Pro Cash Analyzer", "Live FNO Screener", "Options Alpha 🚀", "Smart Money 🧠", "Ledger & PnL 📈"])
 
 with tab1: pro_analyzer.render_ui(fyers)
 with tab2: fno_screener.render_ui(fyers)
 with tab3: options_engine.render_ui(fyers)
 with tab4: smart_money.render_ui(fyers)
-with tab5: paper_ledger.render_ui(fyers) # <-- LEDGER TAB
+with tab5: paper_ledger.render_ui(fyers)
