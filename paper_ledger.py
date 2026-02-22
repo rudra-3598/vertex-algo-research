@@ -16,7 +16,6 @@ def save_trades(df):
 def close_trade(index, exit_price, is_target_hit):
     df = load_trades()
     entry = df.at[index, 'Entry']
-    profile = df.at[index, 'Profile']
     
     # Calculate PnL multiplier based on Buyer vs Seller
     multiplier = 1 if "BUY" in df.at[index, 'Action'] else -1
@@ -34,7 +33,7 @@ def render_ui(fyers):
     df = load_trades()
     
     if df.empty:
-        st.info("No trades logged yet. Go to 'Options Alpha', scan the grid, and click 'Paper Trade' to start tracking!")
+        st.info("No trades logged yet. Go to 'Options Alpha', scan the grid, and click '📝 Track' to start tracking!")
         return
         
     # --- METRICS DASHBOARD ---
@@ -66,7 +65,7 @@ def render_ui(fyers):
     active_df = df[df['Status'] == 'OPEN']
     if not active_df.empty:
         for idx, row in active_df.iterrows():
-            with st.expander(f"{row['Date']} | {row['Action']} | Entry: Rs.{row['Entry']}"):
+            with st.expander(f"{row['Date']} | {row['Asset']} | {row['Action']} | Entry: Rs.{row['Entry']}"):
                 col_a, col_b, col_c = st.columns(3)
                 with col_a: st.write(f"**Target:** {row['Target']}")
                 with col_b: st.write(f"**Stoploss:** {row['Stoploss']}")
@@ -84,6 +83,7 @@ def render_ui(fyers):
         st.dataframe(closed_trades.style.applymap(
             lambda x: 'color: #2ca02c; font-weight:bold;' if x > 0 else 'color: #d62728; font-weight:bold;' if x < 0 else '', 
             subset=['PnL']), use_container_width=True)
+            
         if st.button("🗑️ Clear Ledger History"):
             if os.path.exists(CSV_FILE): os.remove(CSV_FILE)
             st.rerun()
