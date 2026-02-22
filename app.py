@@ -258,7 +258,10 @@ def generate_pro_pdf(ticker, mode, data):
     return filename
 
 # --- UI APP ---
-st.sidebar.image('Black_logo.png', width=150) if os.path.exists('Black_logo.png') else st.sidebar.title("VERTEX ALGO")
+if os.path.exists('Black_logo.png'):
+    st.sidebar.image('Black_logo.png', width=150)
+else:
+    st.sidebar.title("VERTEX ALGO")
 
 with st.sidebar.expander("🔐 Fyers Admin Auth (Auto-Saved)"):
     if st.session_state['fyers_access_token']:
