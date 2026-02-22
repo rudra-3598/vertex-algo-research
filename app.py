@@ -6,11 +6,11 @@ from fyers_apiv3 import fyersModel
 import pro_analyzer
 import fno_screener
 import options_engine
-import smart_money  # <-- Naya Module Import Kiya
+import smart_money
+import paper_ledger  # <-- NAYA MODULE IMPORT KIYA
 
 st.set_page_config(page_title="Vertex Algo | Pro Terminal", layout="wide")
 
-# --- SECRETS SETUP ---
 try:
     FYERS_CLIENT_ID = st.secrets["FYERS_CLIENT_ID"]
     FYERS_SECRET_KEY = st.secrets["FYERS_SECRET_KEY"]
@@ -19,7 +19,6 @@ except Exception:
     st.error("⚠️ Please configure Fyers and Email Secrets in Streamlit.")
     st.stop()
 
-# --- GLOBAL AUTHENTICATION ---
 TOKEN_FILE = "fyers_token.txt"
 
 def load_saved_token():
@@ -36,44 +35,36 @@ def get_fyers_instance():
     if st.session_state['fyers_access_token']: return fyersModel.FyersModel(client_id=FYERS_CLIENT_ID, is_async=False, token=st.session_state['fyers_access_token'], log_path="")
     return None
 
-# --- UI SIDEBAR ---
-if os.path.exists('Black_logo.png'):
-    st.sidebar.image('Black_logo.png', use_container_width=True)
-else:
-    st.sidebar.title("VERTEX ALGO")
+if os.path.exists('Black_logo.png'): st.sidebar.image('Black_logo.png', use_container_width=True)
+else: st.sidebar.title("VERTEX ALGO")
 
-with st.sidebar.expander("🔐 Fyers Admin Auth (Auto-Saved)"):
+with st.sidebar.expander("🔐 Fyers Admin Auth"):
     if st.session_state['fyers_access_token']:
-        st.success("✅ Terminal Unlocked globally for today!")
-        if st.button("Reset Token (If Expired)"):
-            save_token_to_file(""); st.session_state['fyers_access_token'] = None; st.rerun()
+        st.success("✅ Terminal Unlocked!")
+        if st.button("Reset Token"): save_token_to_file(""); st.session_state['fyers_access_token'] = None; st.rerun()
     else:
         session = fyersModel.SessionModel(client_id=FYERS_CLIENT_ID, secret_key=FYERS_SECRET_KEY, redirect_uri=FYERS_REDIRECT_URI, response_type="code", grant_type="authorization_code")
         st.markdown(f"[🔗 Generate Auth Code Here]({session.generate_authcode()})")
         if st.button("Unlock Terminal"):
             try:
-                auth_code = st.text_input("Paste Auth Code Here", type="password")
+                auth_code = st.text_input("Paste Auth Code", type="password")
                 session.set_token(auth_code)
                 res = session.generate_token()
                 if "access_token" in res:
                     st.session_state['fyers_access_token'] = res["access_token"]
-                    save_token_to_file(res["access_token"]) 
-                    st.success("✅ Token Saved. Refreshing..."); st.rerun()
-            except Exception as e: st.error("Auth Error. Check code.")
+                    save_token_to_file(res["access_token"]); st.success("✅ Token Saved!"); st.rerun()
+            except Exception as e: st.error("Auth Error.")
 
-if not st.session_state['fyers_access_token']:
-    st.warning("🔒 Terminal Locked. Admin must authenticate via sidebar.")
-    st.stop()
+if not st.session_state['fyers_access_token']: st.warning("🔒 Terminal Locked."); st.stop()
 
 fyers = get_fyers_instance()
-
-# --- MAIN TERMINAL UI ---
 st.title("Institutional Trading Terminal")
 
-# <-- 4 TABS HO GAYE AB -->
-tab1, tab2, tab3, tab4 = st.tabs(["Pro Cash Analyzer", "Live FNO Screener", "Options & Derivatives 🚀", "Smart Money & Alpha 🧠"])
+# <-- 5 TABS HO GAYE AB -->
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["Pro Cash Analyzer", "Live FNO Screener", "Options Alpha 🚀", "Smart Money 🧠", "Ledger & PnL 📈"])
 
 with tab1: pro_analyzer.render_ui(fyers)
 with tab2: fno_screener.render_ui(fyers)
 with tab3: options_engine.render_ui(fyers)
-with tab4: smart_money.render_ui(fyers) # <-- Naya Tab Route Kar Diya
+with tab4: smart_money.render_ui(fyers)
+with tab5: paper_ledger.render_ui(fyers) # <-- LEDGER TAB
