@@ -9,7 +9,8 @@ import os
 import pdfkit
 import smtplib
 from email.message import EmailMessage
-import csv  # <-- ADDED FOR PAPER TRADING
+import csv  
+from streamlit_autorefresh import st_autorefresh # <-- NAYA AUTO-PILOT IMPORT
 
 # --- DATABASES ---
 @st.cache_data
@@ -167,7 +168,6 @@ def email_detailed_setup(fyers, symbol, profile, email, max_risk):
     risk_per_unit = abs(opt_price - opt_sl)
     rec_quantity = int(max_risk / risk_per_unit) if risk_per_unit > 0 else 0
     
-    # Deep AI Summary with Spot, OI, and Premium
     ai_summary = f"""
     <strong>The Triple Confluence Logic:</strong><br>
     <strong>1. Cash Market (Spot):</strong> {spot_rationale} ATR Volatility stands at {spot_atr:.2f}.<br>
@@ -219,7 +219,6 @@ def email_detailed_setup(fyers, symbol, profile, email, max_risk):
 
 # --- MAIN UI RENDERER ---
 def render_ui(fyers):
-    # 👇 MEMORY FIX IS HERE: DATA WILL NEVER VANISH ON BUTTON CLICK 👇
     if 'grid_scan_results' not in st.session_state:
         st.session_state['grid_scan_results'] = []
 
@@ -233,8 +232,19 @@ def render_ui(fyers):
     tab_radar, tab_grid = st.tabs(["🔥 5-Min Hot OI Radar", "📊 Alpha 208-Stock Grid (Cards)"])
     
     with tab_radar:
-        st.write("Scan this every 5 minutes to catch sudden volume and Open Interest spikes in Futures.")
-        if st.button("📡 Scan Live OI Radar Now", type="primary"):
+        # --- THE AUTO-PILOT DASHBOARD SECTION ---
+        head_col1, head_col2 = st.columns([3, 1])
+        with head_col1:
+            st.write("Scan this manually, or turn on Auto-Pilot to catch volume spikes completely hands-free.")
+        with head_col2:
+            auto_pilot = st.toggle("🤖 Auto-Pilot (5 Min)", value=False)
+            
+        if auto_pilot:
+            st_autorefresh(interval=5 * 60 * 1000, key="radar_refresh")
+            st.success("🟢 Live Auto-Pilot ON! Radar will refresh automatically.")
+
+        # If button is clicked OR auto-pilot is ON, it will run the scan!
+        if st.button("📡 Scan Live OI Radar Now", type="primary") or auto_pilot:
             st.info("Scanning Futures market...")
             auto_expiry = get_current_monthly_expiry()
             buildup_data = []
@@ -252,9 +262,9 @@ def render_ui(fyers):
                 except: pass
                 time.sleep(0.15)
                 progress.progress((i + 1) / len(fno_base_universe))
-            status_text.text("Radar Scan Complete!")
+            status_text.text(f"Radar Scan Complete at {datetime.datetime.now().strftime('%H:%M:%S')}!")
             if buildup_data:
-                st.dataframe(pd.DataFrame(buildup_data).style.applymap(lambda x: 'background-color: #d4edda' if 'Long' in str(x) else 'background-color: #f8d7da' if 'Short' in str(x) else '', subset=['Live Bias']), use_container_width=True)
+                st.dataframe(pd.DataFrame(buildup_data).style.applymap(lambda x: 'background-color: rgba(44, 160, 44, 0.2); color: #4caf50' if 'Long' in str(x) else 'background-color: rgba(214, 39, 40, 0.2); color: #ff5252' if 'Short' in str(x) else '', subset=['Live Bias']), use_container_width=True)
 
     with tab_grid:
         st.markdown("#### Deep Technical Setup Grid")
@@ -279,29 +289,28 @@ def render_ui(fyers):
                 time.sleep(0.2) 
                 progress2.progress((i + 1) / total_scan)
             
-            # SAVING DATA TO SESSION STATE TO PREVENT VANISHING
             st.session_state['grid_scan_results'] = temp_results
             status_text2.text(f"Scan Complete! All cards rendered.")
 
-        # RENDERING CARDS DIRECTLY FROM SECURE MEMORY
         if st.session_state['grid_scan_results']:
             cols = st.columns(3)
             for i, item in enumerate(st.session_state['grid_scan_results']):
                 col = cols[i % 3]
                 with col:
                     sym, trend, spot_price, atr, is_squeeze = item['sym'], item['trend'], item['spot_price'], item['atr'], item['is_squeeze']
-                    bg_color = "#e8f5e9" if "BULLISH" in trend else "#ffebee" if "BEARISH" in trend else "#f8f9fa"
-                    border = "#4caf50" if "BULLISH" in trend else "#f44336" if "BEARISH" in trend else "#ced4da"
+                    # Dark mode adjusted colors for cards
+                    bg_color = "rgba(44, 160, 44, 0.1)" if "BULLISH" in trend else "rgba(214, 39, 40, 0.1)" if "BEARISH" in trend else "#1a1c23"
+                    border = "#4caf50" if "BULLISH" in trend else "#ff5252" if "BEARISH" in trend else "#404654"
                     squeeze_html = '<div style="margin-top: 5px;"><span style="background-color: #ff9800; color: white; padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: bold;">🚨 SQUEEZE DETECTED</span></div>' if is_squeeze else ""
                     
                     st.markdown(f"""
-                    <div style="background-color: {bg_color}; border-left: 5px solid {border}; padding: 15px; border-radius: 6px; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                    <div style="background-color: {bg_color}; border-left: 5px solid {border}; padding: 15px; border-radius: 6px; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
                         <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <h3 style="margin: 0; color: #111; font-size: 18px;">{sym}</h3>
-                            <span style="font-size: 12px; color: #666; font-weight: bold;">₹{spot_price:.1f}</span>
+                            <h3 style="margin: 0; color: #fff; font-size: 18px;">{sym}</h3>
+                            <span style="font-size: 12px; color: #ccc; font-weight: bold;">₹{spot_price:.1f}</span>
                         </div>
                         <p style="margin: 8px 0; font-size: 13px; font-weight: 700; color: {border};">{trend}</p>
-                        <div style="font-size: 11px; color: #555;">Vol (ATR): {atr:.2f}</div>
+                        <div style="font-size: 11px; color: #888;">Vol (ATR): {atr:.2f}</div>
                         {squeeze_html}
                     </div>
                     """, unsafe_allow_html=True)
@@ -309,14 +318,12 @@ def render_ui(fyers):
                     if "NEUTRAL" not in trend:
                         btn_col1, btn_col2 = st.columns(2)
                         
-                        # Button 1: Email Tear Sheet
                         with btn_col1:
                             if st.button(f"⚡ Tear Sheet", key=f"btn_pdf_{sym}"):
                                 if user_email:
                                     with st.spinner(f"Compiling..."): email_detailed_setup(fyers, sym, trader_profile, user_email, max_risk)
                                 else: st.error("Email required.")
                                 
-                        # Button 2: Send to Paper Ledger
                         with btn_col2:
                             if st.button(f"📝 Track", key=f"btn_track_{sym}"):
                                 file_exists = os.path.isfile('paper_trades.csv')
@@ -325,7 +332,6 @@ def render_ui(fyers):
                                     if not file_exists:
                                         writer.writerow(['Date', 'Asset', 'Profile', 'Action', 'Entry', 'Target', 'Stoploss', 'Status', 'Exit_Price', 'PnL'])
                                     
-                                    # Approximating option entry math so we don't spam the API on click
                                     entry_approx = round(spot_price * 0.015, 2) 
                                     if "BULLISH" in trend: action_txt = f"BUY CE" if trader_profile == "Option Buyer" else f"SELL PE"
                                     else: action_txt = f"BUY PE" if trader_profile == "Option Buyer" else f"SELL CE"
