@@ -259,7 +259,7 @@ def generate_pro_pdf(ticker, mode, data):
 
 # --- UI APP ---
 if os.path.exists('Black_logo.png'):
-    st.sidebar.image('Black_logo.png', width=150)
+    st.sidebar.image('Black_logo.png', use_container_width=True) 
 else:
     st.sidebar.title("VERTEX ALGO")
 
