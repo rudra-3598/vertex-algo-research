@@ -79,7 +79,10 @@ def run_v13_god_mode(fyers, symbol, days_back, is_option_mode=False):
 
     if df_5m is None or df_2m is None: return pd.DataFrame(), [0]
 
-    # 🔥 FIX 1: Sort index to prevent ANY pandas slicing errors
+    # 🔥 BUG FIX 1: Remove Duplicate Timestamps if any API noise occurs
+    df_5m = df_5m[~df_5m.index.duplicated(keep='first')]
+    df_2m = df_2m[~df_2m.index.duplicated(keep='first')]
+
     df_5m.sort_index(inplace=True)
     df_2m.sort_index(inplace=True)
 
@@ -90,6 +93,9 @@ def run_v13_god_mode(fyers, symbol, days_back, is_option_mode=False):
     daily_data['S1'] = (2 * daily_data['Pivot']) - daily_data['high']
     df_5m = df_5m.merge(daily_data[['R1', 'S1']], left_on='date', right_index=True, how='left')
 
+    # 🔥 BUG FIX 2: Vectorized Previous Close (100x Faster & Crash Proof)
+    df_5m['prev_close'] = df_5m['close'].shift(1)
+
     df_2m.ta.rsi(length=14, append=True)
     df_2m.ta.supertrend(length=10, multiplier=3, append=True)
     rsi_col = [c for c in df_2m.columns if 'RSI' in c][0]
@@ -98,11 +104,10 @@ def run_v13_god_mode(fyers, symbol, days_back, is_option_mode=False):
     trade_log, equity_curve, cumulative_pnl = [], [0], 0
 
     for index, row in df_5m.iterrows():
-        if pd.isna(row['R1']) or pd.isna(row['S1']): continue
+        # Check if R1/S1 or Prev Close is NaN
+        if pd.isna(row['R1']) or pd.isna(row['S1']) or pd.isna(row['prev_close']): continue
         
-        idx_loc = df_5m.index.get_loc(index)
-        if idx_loc == 0: continue
-        prev_close = df_5m.iloc[idx_loc - 1]['close']
+        prev_close = row['prev_close']
 
         trade_type = None
         if row['close'] > row['R1'] and prev_close <= row['R1']: trade_type = "LONG"
@@ -111,7 +116,7 @@ def run_v13_god_mode(fyers, symbol, days_back, is_option_mode=False):
         if trade_type:
             lookahead_end = index + pd.Timedelta(minutes=6)
             
-            # 🔥 FIX 2: Using Boolean Masking instead of .loc (Crash Proof)
+            # Using Boolean Masking (Safe Slicing)
             window_df = df_2m[(df_2m.index >= index) & (df_2m.index <= lookahead_end)]
             
             for opt_idx, opt_candle in window_df.iterrows():
@@ -124,7 +129,7 @@ def run_v13_god_mode(fyers, symbol, days_back, is_option_mode=False):
                     entry_price = opt_candle['close']
                     hard_sl = entry_price - 40 if trade_type == "LONG" else entry_price + 40
                     
-                    # 🔥 FIX 3: Safe future filtering
+                    # Safe future iteration
                     future_candles = df_2m[df_2m.index >= (opt_idx + pd.Timedelta(minutes=2))]
                     exit_price, exit_time, exit_reason = 0, None, ""
                     
@@ -152,7 +157,6 @@ def run_v13_god_mode(fyers, symbol, days_back, is_option_mode=False):
                     break 
 
     return pd.DataFrame(trade_log), equity_curve
-
 # =====================================================================
 # STRATEGY 2: ADAPTIVE SMC (PRO LEVEL - EXTREMELY SAFE) 🧠
 # =====================================================================
