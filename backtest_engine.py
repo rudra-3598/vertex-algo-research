@@ -79,6 +79,10 @@ def run_v13_god_mode(fyers, symbol, days_back, is_option_mode=False):
 
     if df_5m is None or df_2m is None: return pd.DataFrame(), [0]
 
+    # 🔥 FIX 1: Sort index to prevent ANY pandas slicing errors
+    df_5m.sort_index(inplace=True)
+    df_2m.sort_index(inplace=True)
+
     df_5m['date'] = df_5m.index.date
     daily_data = df_5m.groupby('date').agg({'high': 'max', 'low': 'min', 'close': 'last'}).shift(1)
     daily_data['Pivot'] = (daily_data['high'] + daily_data['low'] + daily_data['close']) / 3
@@ -106,7 +110,9 @@ def run_v13_god_mode(fyers, symbol, days_back, is_option_mode=False):
 
         if trade_type:
             lookahead_end = index + pd.Timedelta(minutes=6)
-            window_df = df_2m.loc[index:lookahead_end]
+            
+            # 🔥 FIX 2: Using Boolean Masking instead of .loc (Crash Proof)
+            window_df = df_2m[(df_2m.index >= index) & (df_2m.index <= lookahead_end)]
             
             for opt_idx, opt_candle in window_df.iterrows():
                 if pd.isna(opt_candle.get(rsi_col)) or pd.isna(opt_candle.get(st_dir_col)): continue
@@ -118,7 +124,8 @@ def run_v13_god_mode(fyers, symbol, days_back, is_option_mode=False):
                     entry_price = opt_candle['close']
                     hard_sl = entry_price - 40 if trade_type == "LONG" else entry_price + 40
                     
-                    future_candles = df_2m.loc[opt_idx + pd.Timedelta(minutes=2):]
+                    # 🔥 FIX 3: Safe future filtering
+                    future_candles = df_2m[df_2m.index >= (opt_idx + pd.Timedelta(minutes=2))]
                     exit_price, exit_time, exit_reason = 0, None, ""
                     
                     for f_idx, f_candle in future_candles.iterrows():
@@ -145,7 +152,6 @@ def run_v13_god_mode(fyers, symbol, days_back, is_option_mode=False):
                     break 
 
     return pd.DataFrame(trade_log), equity_curve
-
 
 # =====================================================================
 # STRATEGY 2: ADAPTIVE SMC (PRO LEVEL - EXTREMELY SAFE) 🧠
